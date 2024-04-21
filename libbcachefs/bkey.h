@@ -8,6 +8,7 @@
 #include "btree_types.h"
 #include "util.h"
 #include "vstructs.h"
+#include "bcachefs.h"
 
 enum bch_validate_flags {
 	BCH_VALIDATE_write		= (1U << 0),

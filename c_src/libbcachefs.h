@@ -6,6 +6,7 @@
 
 #include "libbcachefs/bcachefs_format.h"
 #include "libbcachefs/bcachefs_ioctl.h"
+#include "libbcachefs/inode.h"
 #include "libbcachefs/opts.h"
 #include "libbcachefs/vstructs.h"
 #include "tools-util.h"
@@ -37,6 +38,7 @@ struct format_opts {
 	unsigned	superblock_size;
 	bool		encrypted;
 	char		*passphrase;
+	char		*source;
 };
 
 static inline struct format_opts format_opts_default()
