@@ -21,6 +21,7 @@
 #include <uuid/uuid.h>
 
 #include "cmds.h"
+#include "posix_to_bcachefs.h"
 #include "libbcachefs.h"
 #include "crypto.h"
 #include "libbcachefs/errcode.h"
@@ -45,6 +46,7 @@ x(0,	data_allowed,		required_argument)	\
 x(0,	durability,		required_argument)	\
 x(0,	version,		required_argument)	\
 x(0,	no_initialize,		no_argument)		\
+x(0,	source,			required_argument)	\
 x('f',	force,			no_argument)		\
 x('q',	quiet,			no_argument)		\
 x('v',	verbose,		no_argument)		\
@@ -66,6 +68,7 @@ static void usage(void)
 	     "  -L, --fs_label=label\n"
 	     "  -U, --uuid=uuid\n"
 	     "      --superblock_size=size\n"
+	     "      --source=path           Initialize the bcachefs filesystem from this root directory\n"
 	     "\n"
 	     "Device specific options:");
 
@@ -113,6 +116,18 @@ u64 read_flag_list_or_die(char *opt, const char * const list[],
 	return v;
 }
 
+void build_fs(struct bch_fs *c, const char *src_path)
+{
+	struct copy_fs_state s = {};
+	int src_fd = xopen(src_path, O_RDONLY|O_NOATIME);
+	struct stat stat = xfstat(src_fd);
+
+	if (!S_ISDIR(stat.st_mode))
+		die("%s is not a directory", src_path);
+
+	copy_fs(c, src_fd, src_path, &s);
+}
+
 int cmd_format(int argc, char *argv[])
 {
 	DARRAY(struct dev_opts) devices = { 0 };
@@ -144,6 +159,9 @@ int cmd_format(int argc, char *argv[])
 
 			opt_set(fs_opts, metadata_replicas, v);
 			opt_set(fs_opts, data_replicas, v);
+			break;
+		case O_source:
+			opts.source = optarg;
 			break;
 		case O_encrypted:
 			opts.encrypted = true;
@@ -277,6 +295,12 @@ int cmd_format(int argc, char *argv[])
 
 	darray_exit(&devices);
 
+	/* don't skip initialization when we have to build an image from a source */
+	if (opts.source && !initialize) {
+		printf("Warning: Forcing the initialization because the source flag was supplied\n");
+		initialize = 1;
+	}
+
 	if (initialize) {
 		struct bch_opts mount_opts = bch2_opts_empty();
 
@@ -293,6 +317,11 @@ int cmd_format(int argc, char *argv[])
 		if (IS_ERR(c))
 			die("error opening %s: %s", device_paths.data[0],
 			    bch2_err_str(PTR_ERR(c)));
+
+		if (opts.source) {
+			build_fs(c, opts.source);
+		}
+
 
 		bch2_fs_stop(c);
 	}

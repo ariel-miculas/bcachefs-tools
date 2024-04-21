@@ -2,6 +2,7 @@
 #ifndef _BCACHEFS_FS_COMMON_H
 #define _BCACHEFS_FS_COMMON_H
 
+#include "libbcachefs/dirent.h"
 struct posix_acl;
 
 #define BCH_CREATE_TMPFILE		(1U << 0)
