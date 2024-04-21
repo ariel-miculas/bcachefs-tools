@@ -8,6 +8,7 @@
 #include "btree_types.h"
 #include "util.h"
 #include "vstructs.h"
+#include "bcachefs.h"
 
 enum bkey_invalid_flags {
 	BKEY_INVALID_WRITE		= (1U << 0),

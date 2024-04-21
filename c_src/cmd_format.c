@@ -6,6 +6,7 @@
  * GPLv2
  */
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -23,7 +24,9 @@
 #include "cmds.h"
 #include "libbcachefs.h"
 #include "crypto.h"
+#include "libbcachefs/bcachefs.h"
 #include "libbcachefs/errcode.h"
+#include "libbcachefs/inode.h"
 #include "libbcachefs/opts.h"
 #include "libbcachefs/super-io.h"
 #include "libbcachefs/util.h"
@@ -45,6 +48,7 @@ x(0,	data_allowed,		required_argument)	\
 x(0,	durability,		required_argument)	\
 x(0,	version,		required_argument)	\
 x(0,	no_initialize,		no_argument)		\
+x(0,	source,			required_argument)	\
 x('f',	force,			no_argument)		\
 x('q',	quiet,			no_argument)		\
 x('v',	verbose,		no_argument)		\
@@ -66,6 +70,7 @@ static void usage(void)
 	     "  -L, --fs_label=label\n"
 	     "  -U, --uuid=uuid\n"
 	     "      --superblock_size=size\n"
+	     "      --source=path           Initialize the bcachefs filesystem from this root directory\n"
 	     "\n"
 	     "Device specific options:");
 
@@ -113,6 +118,162 @@ u64 read_flag_list_or_die(char *opt, const char * const list[],
 	return v;
 }
 
+static void copy_file(struct bch_fs *c, struct bch_inode_unpacked *dst,
+		      int src_fd, u64 src_size,
+		      char *src_path)
+{
+	struct fiemap_iter iter;
+	struct fiemap_extent e;
+
+	fiemap_for_each(src_fd, iter, e)
+		if (e.fe_flags & FIEMAP_EXTENT_UNKNOWN) {
+			fsync(src_fd);
+			break;
+		}
+	fiemap_iter_exit(&iter);
+
+	fiemap_for_each(src_fd, iter, e) {
+		u64 src_max = roundup(src_size, block_bytes(c));
+
+		e.fe_length = min(e.fe_length, src_max - e.fe_logical);
+
+		if ((e.fe_logical	& (block_bytes(c) - 1)) ||
+		    (e.fe_length	& (block_bytes(c) - 1)))
+			die("Unaligned extent in %s - can't handle", src_path);
+
+		copy_data(c, dst, src_fd, e.fe_logical,
+			  min(src_size - e.fe_logical,
+			      e.fe_length));
+	}
+	fiemap_iter_exit(&iter);
+}
+
+struct copy_fs_state {
+	GENRADIX(u64)		hardlinks;
+};
+
+static void copy_dir(struct copy_fs_state *s,
+		     struct bch_fs *c,
+		     struct bch_inode_unpacked *dst,
+		     int src_fd, const char *src_path)
+{
+	DIR *dir = fdopendir(src_fd);
+	struct dirent *d;
+
+	while ((errno = 0), (d = readdir(dir))) {
+		struct bch_inode_unpacked inode;
+		int fd;
+
+		if (fchdir(src_fd))
+			die("chdir error: %m");
+
+		struct stat stat =
+			xfstatat(src_fd, d->d_name, AT_SYMLINK_NOFOLLOW);
+
+		if (!strcmp(d->d_name, ".") ||
+		    !strcmp(d->d_name, "..") ||
+		    !strcmp(d->d_name, "lost+found"))
+			continue;
+
+		char *child_path = mprintf("%s/%s", src_path, d->d_name);
+
+		u64 *dst_inum = S_ISREG(stat.st_mode)
+			? genradix_ptr_alloc(&s->hardlinks, stat.st_ino, GFP_KERNEL)
+			: NULL;
+
+		if (dst_inum && *dst_inum) {
+			create_link(c, dst, d->d_name, *dst_inum, S_IFREG);
+			goto next;
+		}
+
+		inode = create_file(c, dst, d->d_name,
+				    stat.st_uid, stat.st_gid,
+				    stat.st_mode, stat.st_rdev);
+
+		if (dst_inum)
+			*dst_inum = inode.bi_inum;
+
+		copy_times(c, &inode, &stat);
+		copy_xattrs(c, &inode, d->d_name);
+
+		/* copy xattrs */
+
+		switch (mode_to_type(stat.st_mode)) {
+		case DT_DIR:
+			fd = xopen(d->d_name, O_RDONLY|O_NOATIME);
+			copy_dir(s, c, &inode, fd, child_path);
+			close(fd);
+			break;
+		case DT_REG:
+			inode.bi_size = stat.st_size;
+
+			fd = xopen(d->d_name, O_RDONLY|O_NOATIME);
+			copy_file(c, &inode, fd, stat.st_size,
+				  child_path);
+			close(fd);
+			break;
+		case DT_LNK:
+			inode.bi_size = stat.st_size;
+
+			copy_link(c, &inode, d->d_name);
+			break;
+		case DT_FIFO:
+		case DT_CHR:
+		case DT_BLK:
+		case DT_SOCK:
+		case DT_WHT:
+			/* nothing else to copy for these: */
+			break;
+		default:
+			BUG();
+		}
+
+		update_inode(c, &inode);
+next:
+		free(child_path);
+	}
+
+	if (errno)
+		die("readdir error: %m");
+	closedir(dir);
+}
+
+static void copy_fs(struct bch_fs *c, int src_fd, const char *src_path) {
+	struct copy_fs_state s = {};
+	syncfs(src_fd);
+
+	struct bch_inode_unpacked root_inode;
+	int ret = bch2_inode_find_by_inum(c, (subvol_inum) { 1, BCACHEFS_ROOT_INO },
+					  &root_inode);
+	if (ret)
+		die("error looking up root directory: %s", bch2_err_str(ret));
+
+	if (fchdir(src_fd))
+		die("chdir error: %m");
+
+	struct stat stat = xfstat(src_fd);
+	copy_times(c, &root_inode, &stat);
+	copy_xattrs(c, &root_inode, ".");
+
+	/* now, copy: */
+	copy_dir(&s, c, &root_inode, src_fd, src_path);
+
+	update_inode(c, &root_inode);
+
+	genradix_free(&s.hardlinks);
+}
+
+void build_fs(struct bch_fs *c, const char *src_path)
+{
+	int src_fd = xopen(src_path, O_RDONLY|O_NOATIME);
+	struct stat stat = xfstat(src_fd);
+
+	if (!S_ISDIR(stat.st_mode))
+		die("%s is not a directory", src_path);
+
+	copy_fs(c, src_fd, src_path);
+}
+
 int cmd_format(int argc, char *argv[])
 {
 	DARRAY(struct dev_opts) devices = { 0 };
@@ -141,6 +302,9 @@ int cmd_format(int argc, char *argv[])
 
 			opt_set(fs_opts, metadata_replicas, v);
 			opt_set(fs_opts, data_replicas, v);
+			break;
+		case O_source:
+			opts.source = optarg;
 			break;
 		case O_encrypted:
 			opts.encrypted = true;
@@ -290,6 +454,11 @@ int cmd_format(int argc, char *argv[])
 		if (IS_ERR(c))
 			die("error opening %s: %s", device_paths.data[0],
 			    bch2_err_str(PTR_ERR(c)));
+
+		if (opts.source) {
+			build_fs(c, opts.source);
+		}
+
 
 		bch2_fs_stop(c);
 	}

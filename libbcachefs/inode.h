@@ -5,6 +5,7 @@
 #include "bkey.h"
 #include "bkey_methods.h"
 #include "opts.h"
+#include "subvolume_types.h"
 
 enum bkey_invalid_flags;
 extern const char * const bch2_inode_opts[];

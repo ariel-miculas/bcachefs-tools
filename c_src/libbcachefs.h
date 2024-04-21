@@ -6,6 +6,7 @@
 
 #include "libbcachefs/bcachefs_format.h"
 #include "libbcachefs/bcachefs_ioctl.h"
+#include "libbcachefs/inode.h"
 #include "libbcachefs/opts.h"
 #include "libbcachefs/vstructs.h"
 #include "tools-util.h"
@@ -37,6 +38,7 @@ struct format_opts {
 	unsigned	superblock_size;
 	bool		encrypted;
 	char		*passphrase;
+	char		*source;
 };
 
 static inline struct format_opts format_opts_default()
@@ -265,4 +267,24 @@ typedef DARRAY(struct dev_name) dev_names;
 
 dev_names bchu_fs_get_devices(struct bchfs_handle);
 
+void copy_data(struct bch_fs *c,
+		      struct bch_inode_unpacked *dst_inode,
+		      int src_fd, u64 start, u64 end);
+struct bch_inode_unpacked create_file(struct bch_fs *c,
+					     struct bch_inode_unpacked *parent,
+					     const char *name,
+					     uid_t uid, gid_t gid,
+					     mode_t mode, dev_t rdev);
+void copy_link(struct bch_fs *c, struct bch_inode_unpacked *dst,
+		      char *src);
+void create_link(struct bch_fs *c,
+			struct bch_inode_unpacked *parent,
+			const char *name, u64 inum, mode_t mode);
+void update_inode(struct bch_fs *c,
+			 struct bch_inode_unpacked *inode);
+void copy_times(struct bch_fs *c, struct bch_inode_unpacked *dst,
+		       struct stat *src);
+
+void copy_xattrs(struct bch_fs *c, struct bch_inode_unpacked *dst,
+			char *src);
 #endif /* _LIBBCACHE_H */
