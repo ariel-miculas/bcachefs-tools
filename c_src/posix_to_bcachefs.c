@@ -19,7 +19,7 @@ void update_inode(struct bch_fs *c,
 	bch2_inode_pack(&packed, inode);
 	packed.inode.k.p.snapshot = U32_MAX;
 	ret = bch2_btree_insert(c, BTREE_ID_inodes, &packed.inode.k_i,
-				NULL, 0, 0);
+				NULL, 0, BTREE_ITER_cached);
 	if (ret)
 		die("error updating inode: %s", bch2_err_str(ret));
 }
