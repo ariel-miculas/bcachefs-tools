@@ -288,7 +288,7 @@ static void copy_file(struct bch_fs *c, struct bch_inode_unpacked *dst,
 				  FIEMAP_EXTENT_NOT_ALIGNED|
 				  FIEMAP_EXTENT_DATA_INLINE))) {
 			copy_data(c, dst, src_fd, e.fe_logical,
-				  min(src_size - e.fe_logical,
+				  e.fe_logical + min(src_size - e.fe_logical,
 				      e.fe_length));
 			continue;
 		}
@@ -299,7 +299,7 @@ static void copy_file(struct bch_fs *c, struct bch_inode_unpacked *dst,
 		 */
 		if (e.fe_physical < 1 << 20) {
 			copy_data(c, dst, src_fd, e.fe_logical,
-				  min(src_size - e.fe_logical,
+				  e.fe_logical + min(src_size - e.fe_logical,
 				      e.fe_length));
 			continue;
 		}
