@@ -360,7 +360,6 @@ static void copy_dir(struct copy_fs_state *s,
 		if (dst_inum)
 			*dst_inum = inode.bi_inum;
 
-		copy_times(c, &inode, &stat);
 		copy_xattrs(c, &inode, d->d_name);
 
 		/* copy xattrs */
@@ -395,6 +394,7 @@ static void copy_dir(struct copy_fs_state *s,
 			BUG();
 		}
 
+		copy_times(c, &inode, &stat);
 		update_inode(c, &inode);
 next:
 		free(child_path);
